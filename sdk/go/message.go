@@ -8,50 +8,87 @@
 package sdk
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"strings"
+
+	"github.com/mainflux/mainflux"
 )
 
-// Default msgContentType is SenML
-var msgContentType = contentTypeSenMLJSON
-
-// SendMessage - send message on Mainflux channel
-func (sdk *MfxSDK) SendMessage(id, msg, token string) error {
-	var url string
-	switch sdk.tls {
-	case true:
-		url = fmt.Sprintf("%s/%s/%s/%s", sdk.url, "http/channels", id, "messages")
-	case false:
-		url = fmt.Sprintf("%s/%s/%s/%s", sdk.url, "channels", id, "messages")
-	}
+func (sdk mfSDK) SendMessage(chanID, msg, token string) error {
+	endpoint := fmt.Sprintf("channels/%s/messages", chanID)
+	url := createURL(sdk.baseURL, sdk.httpAdapterPrefix, endpoint)
 
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(msg))
 	if err != nil {
 		return err
 	}
 
-	resp, err := sdk.sendRequest(req, token, msgContentType)
+	resp, err := sdk.sendRequest(req, token, string(sdk.msgContentType))
 	if err != nil {
 		return err
 	}
 
 	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			return ErrInvalidArgs
+		case http.StatusForbidden:
+			return ErrUnauthorized
+		default:
+			return ErrFailedPublish
+		}
 	}
 
 	return nil
 }
 
-// SetContentType - set message content type.
-// Available options are SenML JSON, custom JSON and custom binary (octet-stream).
-func (sdk *MfxSDK) SetContentType(ct string) error {
-	if ct != contentTypeJSON && ct != contentTypeSenMLJSON && ct != contentTypeBinary {
-		return errors.New("Unknown Content Type")
+func (sdk mfSDK) ReadMessages(chanID, token string) ([]mainflux.Message, error) {
+	endpoint := fmt.Sprintf("channels/%s/messages", chanID)
+	url := createURL(sdk.readerURL, "", endpoint)
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	msgContentType = ct
+	resp, err := sdk.sendRequest(req, token, string(sdk.msgContentType))
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			return nil, ErrInvalidArgs
+		case http.StatusForbidden:
+			return nil, ErrUnauthorized
+		default:
+			return nil, ErrFailedRead
+		}
+	}
+
+	var l listMessagesRes
+	if err := json.Unmarshal(body, &l); err != nil {
+		return nil, err
+	}
+
+	return l.Messages, nil
+}
+
+func (sdk *mfSDK) SetContentType(ct ContentType) error {
+	if ct != CTJSON && ct != CTJSONSenML && ct != CTBinary {
+		return ErrInvalidContentType
+	}
+
+	sdk.msgContentType = ct
 
 	return nil
 }

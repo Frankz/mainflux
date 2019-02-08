@@ -7,9 +7,7 @@
 
 package http
 
-import (
-	"github.com/mainflux/mainflux/things"
-)
+import "github.com/mainflux/mainflux/things"
 
 const maxLimitSize = 100
 
@@ -30,8 +28,10 @@ func (req identityReq) validate() error {
 }
 
 type addThingReq struct {
-	key   string
-	thing things.Thing
+	key      string
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	Metadata string `json:"metadata,omitempty"`
 }
 
 func (req addThingReq) validate() error {
@@ -39,13 +39,19 @@ func (req addThingReq) validate() error {
 		return things.ErrUnauthorizedAccess
 	}
 
-	return req.thing.Validate()
+	if req.Type == "" {
+		return things.ErrMalformedEntity
+	}
+
+	return nil
 }
 
 type updateThingReq struct {
-	key   string
-	id    uint64
-	thing things.Thing
+	key      string
+	id       string
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	Metadata string `json:"metadata,omitempty"`
 }
 
 func (req updateThingReq) validate() error {
@@ -53,16 +59,17 @@ func (req updateThingReq) validate() error {
 		return things.ErrUnauthorizedAccess
 	}
 
-	if req.id < 1 {
-		return things.ErrNotFound
+	if req.id == "" || req.Type == "" {
+		return things.ErrMalformedEntity
 	}
 
-	return req.thing.Validate()
+	return nil
 }
 
 type createChannelReq struct {
-	key     string
-	channel things.Channel
+	key      string
+	Name     string `json:"name,omitempty"`
+	Metadata string `json:"metadata,omitempty"`
 }
 
 func (req createChannelReq) validate() error {
@@ -74,9 +81,10 @@ func (req createChannelReq) validate() error {
 }
 
 type updateChannelReq struct {
-	key     string
-	id      uint64
-	channel things.Channel
+	key      string
+	id       string
+	Name     string `json:"name,omitempty"`
+	Metadata string `json:"metadata,omitempty"`
 }
 
 func (req updateChannelReq) validate() error {
@@ -84,8 +92,8 @@ func (req updateChannelReq) validate() error {
 		return things.ErrUnauthorizedAccess
 	}
 
-	if req.id < 1 {
-		return things.ErrNotFound
+	if req.id == "" {
+		return things.ErrMalformedEntity
 	}
 
 	return nil
@@ -93,7 +101,7 @@ func (req updateChannelReq) validate() error {
 
 type viewResourceReq struct {
 	key string
-	id  uint64
+	id  string
 }
 
 func (req viewResourceReq) validate() error {
@@ -101,8 +109,8 @@ func (req viewResourceReq) validate() error {
 		return things.ErrUnauthorizedAccess
 	}
 
-	if req.id < 1 {
-		return things.ErrNotFound
+	if req.id == "" {
+		return things.ErrMalformedEntity
 	}
 
 	return nil
@@ -110,8 +118,8 @@ func (req viewResourceReq) validate() error {
 
 type listResourcesReq struct {
 	key    string
-	offset int
-	limit  int
+	offset uint64
+	limit  uint64
 }
 
 func (req *listResourcesReq) validate() error {
@@ -119,17 +127,40 @@ func (req *listResourcesReq) validate() error {
 		return things.ErrUnauthorizedAccess
 	}
 
-	if req.offset >= 0 && req.limit > 0 && req.limit <= maxLimitSize {
-		return nil
+	if req.limit == 0 || req.limit > maxLimitSize {
+		return things.ErrMalformedEntity
 	}
 
-	return things.ErrMalformedEntity
+	return nil
+}
+
+type listByConnectionReq struct {
+	key    string
+	id     string
+	offset uint64
+	limit  uint64
+}
+
+func (req listByConnectionReq) validate() error {
+	if req.key == "" {
+		return things.ErrUnauthorizedAccess
+	}
+
+	if req.id == "" {
+		return things.ErrMalformedEntity
+	}
+
+	if req.limit == 0 || req.limit > maxLimitSize {
+		return things.ErrMalformedEntity
+	}
+
+	return nil
 }
 
 type connectionReq struct {
 	key     string
-	chanID  uint64
-	thingID uint64
+	chanID  string
+	thingID string
 }
 
 func (req connectionReq) validate() error {
@@ -137,8 +168,8 @@ func (req connectionReq) validate() error {
 		return things.ErrUnauthorizedAccess
 	}
 
-	if req.chanID == 0 || req.thingID == 0 {
-		return things.ErrNotFound
+	if req.chanID == "" || req.thingID == "" {
+		return things.ErrMalformedEntity
 	}
 
 	return nil

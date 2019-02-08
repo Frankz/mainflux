@@ -17,8 +17,6 @@ services:
   mongodb:
     image: mongo:3.6-jessie
     container_name: mainflux-mongodb
-    expose:
-      - 27017
     restart: on-failure
     environment:
       MONGO_INITDB_DATABASE: mainflux
@@ -34,6 +32,7 @@ services:
       - mongodb
     restart: on-failure
     environment:
+      MF_MONGO_WRITER_LOG_LEVEL: debug
       MF_NATS_URL: nats://nats:4222
       MF_MONGO_WRITER_PORT: 8901
       MF_MONGO_WRITER_DB_NAME: mainflux

@@ -53,10 +53,10 @@ services:
     depends_on:
       - users-db
     expose:
-      - 8180
       - 8181
     restart: on-failure
     environment:
+      MF_USERS_LOG_LEVEL: debug
       MF_USERS_DB_HOST: users-db
       MF_USERS_DB_PORT: 5432
       MF_USERS_DB_USER: mainflux
@@ -81,9 +81,9 @@ services:
     networks:
       - mainflux-base-net
 
-  things-cache:
-    image: redis:4.0.9-alpine
-    container_name: mainflux-things-cache
+  things-redis:
+    image: redis:5.0-alpine
+    container_name: mainflux-things-redis
     restart: on-failure
     networks:
       - mainflux-base-net
@@ -94,23 +94,23 @@ services:
     depends_on:
       - things-db
       - users
-    expose:
-      - 8182
-      - 8183
     restart: on-failure
     environment:
+      MF_THINGS_LOG_LEVEL: debug
       MF_THINGS_DB_HOST: things-db
       MF_THINGS_DB_PORT: 5432
       MF_THINGS_DB_USER: mainflux
       MF_THINGS_DB_PASS: mainflux
       MF_THINGS_DB: things
-      MF_THINGS_CACHE_URL: things-cache:6379
+      MF_THINGS_CACHE_URL: things-redis:6379
+      MF_THINGS_ES_URL: things-redis:6379
       MF_THINGS_HTTP_PORT: 8182
       MF_THINGS_GRPC_PORT: 8183
       MF_USERS_URL: users:8181
       MF_THINGS_SECRET: secret
     ports:
       - 8182:8182
+      - 8183:8183
     networks:
       - mainflux-base-net
 
@@ -123,8 +123,11 @@ services:
     expose:
       - 8184
     environment:
+      MF_NORMALIZER_LOG_LEVEL: debug
       MF_NATS_URL: nats://nats:4222
       MF_NORMALIZER_PORT: 8184
+    ports:
+      - 8184:8184
     networks:
       - mainflux-base-net
 
@@ -143,10 +146,9 @@ services:
     depends_on:
       - things
       - nats
-    expose:
-      - 8186
     restart: on-failure
     environment:
+      MF_WS_ADAPTER_LOG_LEVEL: debug
       MF_WS_ADAPTER_PORT: 8186
       MF_NATS_URL: nats://nats:4222
       MF_THINGS_URL: things:8183
@@ -165,6 +167,7 @@ services:
     expose:
       - 8185
     environment:
+      MF_HTTP_ADAPTER_LOG_LEVEL: debug
       MF_HTTP_ADAPTER_PORT: 8185
       MF_NATS_URL: nats://nats:4222
       MF_THINGS_URL: things:8183
@@ -189,13 +192,31 @@ services:
       - redis
     restart: on-failure
     environment:
+      MF_MQTT_ADAPTER_LOG_LEVEL: debug
       MF_MQTT_ADAPTER_PORT: 1883
-      MF_MQTT_WS_PORT: 8880
-      MF_MQTT_REDIS_HOST: redis
+      MF_MQTT_ADAPTER_WS_PORT: 8880
+      MF_MQTT_ADAPTER_REDIS_HOST: redis
       MF_NATS_URL: nats://nats:4222
       MF_THINGS_URL: things:8183
     ports:
       - 1883:1883
       - 8880:8880
+    networks:
+      - mainflux-base-net
+
+  coap-adapter:
+    image: mainflux/coap:latest
+    container_name: mainflux-coap
+    depends_on:
+      - things
+      - nats
+    restart: on-failure
+    environment:
+      MF_COAP_ADAPTER_LOG_LEVEL: debug
+      MF_COAP_ADAPTER_PORT: 5683
+      MF_NATS_URL: nats://nats:4222
+      MF_THINGS_URL: things:8183
+    ports:
+      - 5683:5683
     networks:
       - mainflux-base-net

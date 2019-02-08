@@ -26,11 +26,12 @@ var _ writers.MessageRepository = (*influxRepo)(nil)
 var (
 	errZeroValueSize    = errors.New("zero value batch size")
 	errZeroValueTimeout = errors.New("zero value batch timeout")
+	errNilBatch         = errors.New("nil batch")
 )
 
 type influxRepo struct {
 	client    influxdata.Client
-	batch     []*influxdata.Point
+	batch     influxdata.BatchPoints
 	batchSize int
 	mu        sync.Mutex
 	tick      <-chan time.Time
@@ -42,11 +43,11 @@ type tags map[string]string
 
 // New returns new InfluxDB writer.
 func New(client influxdata.Client, database string, batchSize int, batchTimeout time.Duration) (writers.MessageRepository, error) {
-	if batchSize == 0 {
+	if batchSize <= 0 {
 		return &influxRepo{}, errZeroValueSize
 	}
 
-	if batchTimeout == 0 {
+	if batchTimeout <= 0 {
 		return &influxRepo{}, errZeroValueTimeout
 	}
 
@@ -56,82 +57,102 @@ func New(client influxdata.Client, database string, batchSize int, batchTimeout 
 			Database: database,
 		},
 		batchSize: batchSize,
-		batch:     []*influxdata.Point{},
+	}
+
+	var err error
+	repo.batch, err = influxdata.NewBatchPoints(repo.cfg)
+	if err != nil {
+		return &influxRepo{}, err
 	}
 
 	repo.tick = time.NewTicker(batchTimeout).C
 	go func() {
 		for {
 			<-repo.tick
-			repo.save()
+			// Nil point indicates that savePoint method is triggered by the ticker.
+			repo.savePoint(nil)
 		}
 	}()
 
 	return repo, nil
 }
 
-func (repo *influxRepo) save() error {
+func (repo *influxRepo) savePoint(point *influxdata.Point) error {
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
-	bp, err := influxdata.NewBatchPoints(repo.cfg)
-	if err != nil {
-		return err
+	if repo.batch == nil {
+		return errNilBatch
 	}
 
-	bp.AddPoints(repo.batch)
-
-	if err := repo.client.Write(bp); err != nil {
-		return err
+	// Ignore ticker if there is nothing to save.
+	if len(repo.batch.Points()) == 0 && point == nil {
+		return nil
 	}
 
-	// It would be nice to reset ticker at this point, which
-	// implies creating a new ticker and goroutine. It would
-	// introduce unnecessary complexity with no justified benefits.
-	repo.batch = []*influxdata.Point{}
+	if point != nil {
+		repo.batch.AddPoint(point)
+	}
+
+	if len(repo.batch.Points())%repo.batchSize == 0 || point == nil {
+		if err := repo.client.Write(repo.batch); err != nil {
+			return err
+		}
+		// It would be nice to reset ticker at this point, which
+		// implies creating a new ticker and goroutine. It would
+		// introduce unnecessary complexity with no justified benefits.
+		var err error
+		repo.batch, err = influxdata.NewBatchPoints(repo.cfg)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 func (repo *influxRepo) Save(msg mainflux.Message) error {
-	tags, fields := repo.tagsOf(&msg), repo.fieldsOf(&msg)
-	pt, err := influxdata.NewPoint(pointName, tags, fields, time.Now())
+	tgs, flds := repo.tagsOf(&msg), repo.fieldsOf(&msg)
+	t := time.Unix(int64(msg.Time), 0)
+
+	pt, err := influxdata.NewPoint(pointName, tgs, flds, t)
 	if err != nil {
 		return err
 	}
 
-	repo.mu.Lock()
-	repo.batch = append(repo.batch, pt)
-	repo.mu.Unlock()
-
-	if len(repo.batch)%repo.batchSize == 0 {
-		return repo.save()
-	}
-	return nil
+	return repo.savePoint(pt)
 }
 
 func (repo *influxRepo) tagsOf(msg *mainflux.Message) tags {
-	time := strconv.FormatFloat(msg.Time, 'f', -1, 64)
-	update := strconv.FormatFloat(msg.UpdateTime, 'f', -1, 64)
-	channel := strconv.FormatUint(msg.Channel, 10)
-	publisher := strconv.FormatUint(msg.Publisher, 10)
-
 	return tags{
-		"Channel":    channel,
-		"Publisher":  publisher,
-		"Protocol":   msg.Protocol,
-		"Name":       msg.Name,
-		"Unit":       msg.Unit,
-		"Link":       msg.Link,
-		"Time":       time,
-		"UpdateTime": update,
+		"channel":   msg.Channel,
+		"publisher": msg.Publisher,
+		"name":      msg.Name,
 	}
 }
 
 func (repo *influxRepo) fieldsOf(msg *mainflux.Message) fields {
-	return fields{
-		"Value":       msg.Value,
-		"ValueSum":    msg.ValueSum,
-		"BoolValue":   msg.BoolValue,
-		"StringValue": msg.StringValue,
-		"DataValue":   msg.DataValue,
+	updateTime := strconv.FormatFloat(msg.UpdateTime, 'f', -1, 64)
+	ret := fields{
+		"protocol":   msg.Protocol,
+		"unit":       msg.Unit,
+		"link":       msg.Link,
+		"updateTime": updateTime,
 	}
+
+	switch msg.Value.(type) {
+	case *mainflux.Message_FloatValue:
+		ret["value"] = msg.GetFloatValue()
+	case *mainflux.Message_StringValue:
+		ret["stringValue"] = msg.GetStringValue()
+	case *mainflux.Message_DataValue:
+		ret["dataValue"] = msg.GetDataValue()
+	case *mainflux.Message_BoolValue:
+		ret["boolValue"] = msg.GetBoolValue()
+	}
+
+	if msg.ValueSum != nil {
+		ret["valueSum"] = msg.GetValueSum().GetValue()
+	}
+
+	return ret
 }

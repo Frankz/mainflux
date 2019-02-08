@@ -13,7 +13,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	kithttp "github.com/go-kit/kit/transport/http"
@@ -23,7 +22,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const contentType = "application/json"
+const (
+	contentType = "application/json"
+	offset      = "offset"
+	limit       = "limit"
+
+	defOffset = 0
+	defLimit  = 10
+)
 
 var (
 	errUnsupportedContentType = errors.New("unsupported content type")
@@ -66,6 +72,13 @@ func MakeHandler(svc things.Service) http.Handler {
 		opts...,
 	))
 
+	r.Get("/things/:id/channels", kithttp.NewServer(
+		listChannelsByThingEndpoint(svc),
+		decodeListByConnection,
+		encodeResponse,
+		opts...,
+	))
+
 	r.Get("/things", kithttp.NewServer(
 		listThingsEndpoint(svc),
 		decodeList,
@@ -97,6 +110,13 @@ func MakeHandler(svc things.Service) http.Handler {
 	r.Get("/channels/:id", kithttp.NewServer(
 		viewChannelEndpoint(svc),
 		decodeView,
+		encodeResponse,
+		opts...,
+	))
+
+	r.Get("/channels/:id/things", kithttp.NewServer(
+		listThingsByChannelEndpoint(svc),
+		decodeListByConnection,
 		encodeResponse,
 		opts...,
 	))
@@ -133,14 +153,9 @@ func decodeThingCreation(_ context.Context, r *http.Request) (interface{}, error
 		return nil, errUnsupportedContentType
 	}
 
-	var thing things.Thing
-	if err := json.NewDecoder(r.Body).Decode(&thing); err != nil {
+	req := addThingReq{key: r.Header.Get("Authorization")}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return nil, err
-	}
-
-	req := addThingReq{
-		key:   r.Header.Get("Authorization"),
-		thing: thing,
 	}
 
 	return req, nil
@@ -151,20 +166,12 @@ func decodeThingUpdate(_ context.Context, r *http.Request) (interface{}, error) 
 		return nil, errUnsupportedContentType
 	}
 
-	var thing things.Thing
-	if err := json.NewDecoder(r.Body).Decode(&thing); err != nil {
-		return nil, err
-	}
-
-	id, err := things.FromString(bone.GetValue(r, "id"))
-	if err != nil {
-		return nil, err
-	}
-
 	req := updateThingReq{
-		key:   r.Header.Get("Authorization"),
-		id:    id,
-		thing: thing,
+		key: r.Header.Get("Authorization"),
+		id:  bone.GetValue(r, "id"),
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, err
 	}
 
 	return req, nil
@@ -175,14 +182,9 @@ func decodeChannelCreation(_ context.Context, r *http.Request) (interface{}, err
 		return nil, errUnsupportedContentType
 	}
 
-	var channel things.Channel
-	if err := json.NewDecoder(r.Body).Decode(&channel); err != nil {
+	req := createChannelReq{key: r.Header.Get("Authorization")}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return nil, err
-	}
-
-	req := createChannelReq{
-		key:     r.Header.Get("Authorization"),
-		channel: channel,
 	}
 
 	return req, nil
@@ -193,90 +195,72 @@ func decodeChannelUpdate(_ context.Context, r *http.Request) (interface{}, error
 		return nil, errUnsupportedContentType
 	}
 
-	var channel things.Channel
-	if err := json.NewDecoder(r.Body).Decode(&channel); err != nil {
-		return nil, err
-	}
-
-	id, err := things.FromString(bone.GetValue(r, "id"))
-	if err != nil {
-		return nil, err
-	}
-
 	req := updateChannelReq{
-		key:     r.Header.Get("Authorization"),
-		id:      id,
-		channel: channel,
+		key: r.Header.Get("Authorization"),
+		id:  bone.GetValue(r, "id"),
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, err
 	}
 
 	return req, nil
 }
 
 func decodeView(_ context.Context, r *http.Request) (interface{}, error) {
-	id, err := things.FromString(bone.GetValue(r, "id"))
-	if err != nil {
-		return nil, err
-	}
-
 	req := viewResourceReq{
 		key: r.Header.Get("Authorization"),
-		id:  id,
+		id:  bone.GetValue(r, "id"),
 	}
 
 	return req, nil
 }
 
 func decodeList(_ context.Context, r *http.Request) (interface{}, error) {
-	q, err := url.ParseQuery(r.URL.RawQuery)
+	o, err := readUintQuery(r, offset, defOffset)
 	if err != nil {
-		return nil, errInvalidQueryParams
-	}
-	offset := 0
-	limit := 10
-
-	off, lmt := q["offset"], q["limit"]
-
-	if len(off) > 1 || len(lmt) > 1 {
-		return nil, errInvalidQueryParams
+		return nil, err
 	}
 
-	if len(off) == 1 {
-		offset, err = strconv.Atoi(off[0])
-		if err != nil {
-			return nil, errInvalidQueryParams
-		}
+	l, err := readUintQuery(r, limit, defLimit)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(lmt) == 1 {
-		limit, err = strconv.Atoi(lmt[0])
-		if err != nil {
-			return nil, errInvalidQueryParams
-		}
-	}
 	req := listResourcesReq{
 		key:    r.Header.Get("Authorization"),
-		offset: offset,
-		limit:  limit,
+		offset: o,
+		limit:  l,
+	}
+
+	return req, nil
+}
+
+func decodeListByConnection(_ context.Context, r *http.Request) (interface{}, error) {
+	o, err := readUintQuery(r, offset, defOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	l, err := readUintQuery(r, limit, defLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	req := listByConnectionReq{
+		key:    r.Header.Get("Authorization"),
+		id:     bone.GetValue(r, "id"),
+		offset: o,
+		limit:  l,
 	}
 
 	return req, nil
 }
 
 func decodeConnection(_ context.Context, r *http.Request) (interface{}, error) {
-	thingID, err := things.FromString(bone.GetValue(r, "thingId"))
-	if err != nil {
-		return nil, err
-	}
-
-	chanID, err := things.FromString(bone.GetValue(r, "chanId"))
-	if err != nil {
-		return nil, err
-	}
-
 	req := connectionReq{
 		key:     r.Header.Get("Authorization"),
-		chanID:  chanID,
-		thingID: thingID,
+		chanID:  bone.GetValue(r, "chanId"),
+		thingID: bone.GetValue(r, "thingId"),
 	}
 
 	return req, nil
@@ -310,8 +294,6 @@ func encodeError(_ context.Context, err error, w http.ResponseWriter) {
 		w.WriteHeader(http.StatusForbidden)
 	case things.ErrNotFound:
 		w.WriteHeader(http.StatusNotFound)
-	case things.ErrConflict:
-		w.WriteHeader(http.StatusConflict)
 	case errUnsupportedContentType:
 		w.WriteHeader(http.StatusUnsupportedMediaType)
 	case errInvalidQueryParams:
@@ -330,4 +312,23 @@ func encodeError(_ context.Context, err error, w http.ResponseWriter) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}
+}
+
+func readUintQuery(r *http.Request, key string, def uint64) (uint64, error) {
+	vals := bone.GetQuery(r, key)
+	if len(vals) > 1 {
+		return 0, errInvalidQueryParams
+	}
+
+	if len(vals) == 0 {
+		return def, nil
+	}
+
+	strval := vals[0]
+	val, err := strconv.ParseUint(strval, 10, 64)
+	if err != nil {
+		return 0, errInvalidQueryParams
+	}
+
+	return val, nil
 }

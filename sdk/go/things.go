@@ -8,181 +8,291 @@
 package sdk
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"strconv"
 	"strings"
-
-	"github.com/mainflux/mainflux/things"
 )
 
 const thingsEndpoint = "things"
 
-// CreateThing - creates new thing and generates thing UUID
-func (sdk *MfxSDK) CreateThing(data, token string) (string, error) {
-	url := fmt.Sprintf("%s/%s", sdk.url, thingsEndpoint)
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(data))
+func (sdk mfSDK) CreateThing(thing Thing, token string) (string, error) {
+	data, err := json.Marshal(thing)
+	if err != nil {
+		return "", ErrInvalidArgs
+	}
+
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, thingsEndpoint)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
 		return "", err
 	}
-
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			return "", ErrInvalidArgs
+		case http.StatusForbidden:
+			return "", ErrUnauthorized
+		default:
+			return "", ErrFailedCreation
+		}
 	}
 
-	return resp.Header.Get("Location"), nil
+	id := strings.TrimPrefix(resp.Header.Get("Location"), fmt.Sprintf("/%s/", thingsEndpoint))
+	return id, nil
 }
 
-// Things - gets all things
-func (sdk *MfxSDK) Things(token string) ([]things.Thing, error) {
-	url := fmt.Sprintf("%s/%s?offset=%s&limit=%s",
-		sdk.url, thingsEndpoint, strconv.Itoa(offset), strconv.Itoa(limit))
+func (sdk mfSDK) Things(token string, offset, limit uint64) (ThingsPage, error) {
+	endpoint := fmt.Sprintf("%s?offset=%d&limit=%d", thingsEndpoint, offset, limit)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return ThingsPage{}, err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
-		return nil, err
+		return ThingsPage{}, err
 	}
-
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return ThingsPage{}, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			return ThingsPage{}, ErrInvalidArgs
+		case http.StatusForbidden:
+			return ThingsPage{}, ErrUnauthorized
+		default:
+			return ThingsPage{}, ErrFetchFailed
+		}
 	}
 
-	l := listThingsRes{}
-	if err := json.Unmarshal(body, &l); err != nil {
-		return nil, err
+	var p thingsPageRes
+	if err := json.Unmarshal(body, &p); err != nil {
+		return ThingsPage{}, err
 	}
 
-	return l.Things, nil
+	return ThingsPage{
+		Things: p.Things,
+		Total:  p.Total,
+		Offset: p.Offset,
+		Limit:  p.Limit,
+	}, nil
 }
 
-// Thing - gets thing by ID
-func (sdk *MfxSDK) Thing(id, token string) (things.Thing, error) {
-	url := fmt.Sprintf("%s/%s/%s", sdk.url, thingsEndpoint, id)
-	println(url)
+func (sdk mfSDK) ThingsByChannel(token, chanID string, offset, limit uint64) (ThingsPage, error) {
+	endpoint := fmt.Sprintf("channels/%s/things?offset=%d&limit=%d", chanID, offset, limit)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return things.Thing{}, err
+		return ThingsPage{}, err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
-		return things.Thing{}, err
+		return ThingsPage{}, err
 	}
-
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return things.Thing{}, err
+		return ThingsPage{}, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return things.Thing{}, fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			return ThingsPage{}, ErrInvalidArgs
+		case http.StatusForbidden:
+			return ThingsPage{}, ErrUnauthorized
+		default:
+			return ThingsPage{}, ErrFetchFailed
+		}
 	}
 
-	t := things.Thing{}
+	var p thingsPageRes
+	if err := json.Unmarshal(body, &p); err != nil {
+		return ThingsPage{}, err
+	}
+
+	return ThingsPage{
+		Things: p.Things,
+		Total:  p.Total,
+		Offset: p.Offset,
+		Limit:  p.Limit,
+	}, nil
+}
+
+func (sdk mfSDK) Thing(id, token string) (Thing, error) {
+	endpoint := fmt.Sprintf("%s/%s", thingsEndpoint, id)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return Thing{}, err
+	}
+
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
+	if err != nil {
+		return Thing{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return Thing{}, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		switch resp.StatusCode {
+		case http.StatusForbidden:
+			return Thing{}, ErrUnauthorized
+		case http.StatusNotFound:
+			return Thing{}, ErrNotFound
+		default:
+			return Thing{}, ErrFetchFailed
+		}
+	}
+
+	var t Thing
 	if err := json.Unmarshal(body, &t); err != nil {
-		return things.Thing{}, err
+		return Thing{}, err
 	}
 
 	return t, nil
 }
 
-// UpdateThing - updates thing by ID
-func (sdk *MfxSDK) UpdateThing(id, data, token string) error {
-	url := fmt.Sprintf("%s/%s/%s", sdk.url, thingsEndpoint, id)
-	req, err := http.NewRequest(http.MethodPut, url, strings.NewReader(data))
+func (sdk mfSDK) UpdateThing(thing Thing, token string) error {
+	data, err := json.Marshal(thing)
+	if err != nil {
+		return ErrInvalidArgs
+	}
+
+	endpoint := fmt.Sprintf("%s/%s", thingsEndpoint, thing.ID)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
 		return err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			return ErrInvalidArgs
+		case http.StatusForbidden:
+			return ErrUnauthorized
+		case http.StatusNotFound:
+			return ErrNotFound
+		default:
+			return ErrFailedUpdate
+		}
 	}
 
 	return nil
 }
 
-// DeleteThing - removes thing
-func (sdk *MfxSDK) DeleteThing(id, token string) error {
-	url := fmt.Sprintf("%s/%s/%s", sdk.url, thingsEndpoint, id)
+func (sdk mfSDK) DeleteThing(id, token string) error {
+	endpoint := fmt.Sprintf("%s/%s", thingsEndpoint, id)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		return err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
 		return err
 	}
 
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusForbidden:
+			return ErrUnauthorized
+		case http.StatusBadRequest:
+			return ErrInvalidArgs
+		default:
+			return ErrFailedRemoval
+		}
 	}
 
 	return nil
 }
 
-// ConnectThing - connect thing to a channel
-func (sdk *MfxSDK) ConnectThing(thingID, chanID, token string) error {
-	url := fmt.Sprintf("%s/%s/%s/%s/%s", sdk.url, channelsEndpoint, chanID, thingsEndpoint, thingID)
+func (sdk mfSDK) ConnectThing(thingID, chanID, token string) error {
+	endpoint := fmt.Sprintf("%s/%s/%s/%s", channelsEndpoint, chanID, thingsEndpoint, thingID)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
 	req, err := http.NewRequest(http.MethodPut, url, nil)
 	if err != nil {
 		return err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
 		return err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusForbidden:
+			return ErrUnauthorized
+		case http.StatusNotFound:
+			return ErrNotFound
+		default:
+			return ErrFailedConnection
+		}
 	}
 
 	return nil
 }
 
-// DisconnectThing - connect thing to a channel
-func (sdk *MfxSDK) DisconnectThing(thingID, chanID, token string) error {
-	url := fmt.Sprintf("%s/%s/%s/%s/%s", sdk.url, channelsEndpoint, chanID, thingsEndpoint, thingID)
+func (sdk mfSDK) DisconnectThing(thingID, chanID, token string) error {
+	endpoint := fmt.Sprintf("%s/%s/%s/%s", channelsEndpoint, chanID, thingsEndpoint, thingID)
+	url := createURL(sdk.baseURL, sdk.thingsPrefix, endpoint)
+
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		return err
 	}
 
-	resp, err := sdk.sendRequest(req, token, contentTypeJSON)
+	resp, err := sdk.sendRequest(req, token, string(CTJSON))
 	if err != nil {
 		return err
 	}
 
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("%d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusForbidden:
+			return ErrUnauthorized
+		case http.StatusNotFound:
+			return ErrNotFound
+		default:
+			return ErrFailedDisconnect
+		}
 	}
 
 	return nil

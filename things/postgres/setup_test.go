@@ -18,17 +18,17 @@ import (
 
 	"github.com/mainflux/mainflux/logger"
 	"github.com/mainflux/mainflux/things/postgres"
-	"gopkg.in/ory-am/dockertest.v3"
+	dockertest "gopkg.in/ory-am/dockertest.v3"
 )
 
 const (
-	wrongID    = 0
+	wrongID    = "0"
 	wrongValue = "wrong-value"
 )
 
 var (
 	testLog, _ = logger.New(os.Stdout, logger.Info.String())
-	db      *sql.DB
+	db         *sql.DB
 )
 
 func TestMain(m *testing.M) {
@@ -51,7 +51,7 @@ func TestMain(m *testing.M) {
 
 	if err := pool.Retry(func() error {
 		url := fmt.Sprintf("host=localhost port=%s user=test dbname=test password=test sslmode=disable", port)
-		db, err := sql.Open("postgres", url)
+		db, err = sql.Open("postgres", url)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,19 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Could not connect to docker: %s", err)
 	}
 
-	if db, err = postgres.Connect("localhost", port, "test", "test", "test"); err != nil {
+	dbConfig := postgres.Config{
+		Host:        "localhost",
+		Port:        port,
+		User:        "test",
+		Pass:        "test",
+		Name:        "test",
+		SSLMode:     "disable",
+		SSLCert:     "",
+		SSLKey:      "",
+		SSLRootCert: "",
+	}
+
+	if db, err = postgres.Connect(dbConfig); err != nil {
 		log.Fatalf("Could not setup test DB connection: %s", err)
 	}
 	defer db.Close()

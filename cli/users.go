@@ -8,6 +8,7 @@
 package cli
 
 import (
+	mfxsdk "github.com/mainflux/mainflux/sdk/go"
 	"github.com/spf13/cobra"
 )
 
@@ -21,10 +22,16 @@ var cmdUsers = []cobra.Command{
 				logUsage(cmd.Short)
 				return
 			}
-			if err := sdk.CreateUser(args[0], args[1]); err != nil {
+
+			user := mfxsdk.User{
+				Email:    args[0],
+				Password: args[1],
+			}
+			if err := sdk.CreateUser(user); err != nil {
 				logError(err)
 				return
 			}
+
 			logOK()
 		},
 	},
@@ -37,23 +44,30 @@ var cmdUsers = []cobra.Command{
 				logUsage(cmd.Short)
 				return
 			}
-			token, err := sdk.CreateToken(args[0], args[1])
+
+			user := mfxsdk.User{
+				Email:    args[0],
+				Password: args[1],
+			}
+			token, err := sdk.CreateToken(user)
 			if err != nil {
 				logError(err)
 				return
 			}
-			dump(token)
+
+			logCreated(token)
 		},
 	},
 }
 
+// NewUsersCmd returns users command.
 func NewUsersCmd() *cobra.Command {
 	cmd := cobra.Command{
 		Use:   "users",
-		Short: "users create/token <email> <password>",
-		Long:  `Manages users in the system (create account or token)`,
+		Short: "Users management",
+		Long:  `Users management: create accounts and tokens"`,
 		Run: func(cmd *cobra.Command, args []string) {
-			logUsage(cmd.Short)
+			logUsage("Usage: users [create | token]")
 		},
 	}
 

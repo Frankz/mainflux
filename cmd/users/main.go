@@ -17,6 +17,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/grpc/credentials"
+
 	kitprometheus "github.com/go-kit/kit/metrics/prometheus"
 	"github.com/mainflux/mainflux"
 	"github.com/mainflux/mainflux/logger"
@@ -32,53 +34,63 @@ import (
 )
 
 const (
-	defLogLevel = "error"
-	defDBHost   = "localhost"
-	defDBPort   = "5432"
-	defDBUser   = "mainflux"
-	defDBPass   = "mainflux"
-	defDBName   = "users"
-	defHTTPPort = "8180"
-	defGRPCPort = "8181"
-	defSecret   = "users"
-	envLogLevel = "MF_USERS_LOG_LEVEL"
-	envDBHost   = "MF_USERS_DB_HOST"
-	envDBPort   = "MF_USERS_DB_PORT"
-	envDBUser   = "MF_USERS_DB_USER"
-	envDBPass   = "MF_USERS_DB_PASS"
-	envDBName   = "MF_USERS_DB"
-	envHTTPPort = "MF_USERS_HTTP_PORT"
-	envGRPCPort = "MF_USERS_GRPC_PORT"
-	envSecret   = "MF_USERS_SECRET"
+	defLogLevel      = "error"
+	defDBHost        = "localhost"
+	defDBPort        = "5432"
+	defDBUser        = "mainflux"
+	defDBPass        = "mainflux"
+	defDBName        = "users"
+	defDBSSLMode     = "disable"
+	defDBSSLCert     = ""
+	defDBSSLKey      = ""
+	defDBSSLRootCert = ""
+	defHTTPPort      = "8180"
+	defGRPCPort      = "8181"
+	defSecret        = "users"
+	defServerCert    = ""
+	defServerKey     = ""
+	envLogLevel      = "MF_USERS_LOG_LEVEL"
+	envDBHost        = "MF_USERS_DB_HOST"
+	envDBPort        = "MF_USERS_DB_PORT"
+	envDBUser        = "MF_USERS_DB_USER"
+	envDBPass        = "MF_USERS_DB_PASS"
+	envDBName        = "MF_USERS_DB"
+	envDBSSLMode     = "MF_USERS_DB_SSL_MODE"
+	envDBSSLCert     = "MF_USERS_DB_SSL_CERT"
+	envDBSSLKey      = "MF_USERS_DB_SSL_KEY"
+	envDBSSLRootCert = "MF_USERS_DB_SSL_ROOT_CERT"
+	envHTTPPort      = "MF_USERS_HTTP_PORT"
+	envGRPCPort      = "MF_USERS_GRPC_PORT"
+	envSecret        = "MF_USERS_SECRET"
+	envServerCert    = "MF_USERS_SERVER_CERT"
+	envServerKey     = "MF_USERS_SERVER_KEY"
 )
 
 type config struct {
-	LogLevel string
-	DBHost   string
-	DBPort   string
-	DBUser   string
-	DBPass   string
-	DBName   string
-	HTTPPort string
-	GRPCPort string
-	Secret   string
+	logLevel   string
+	dbConfig   postgres.Config
+	httpPort   string
+	grpcPort   string
+	secret     string
+	serverCert string
+	serverKey  string
 }
 
 func main() {
 	cfg := loadConfig()
 
-	logger, err := logger.New(os.Stdout, cfg.LogLevel)
+	logger, err := logger.New(os.Stdout, cfg.logLevel)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-	db := connectToDB(cfg, logger)
+	db := connectToDB(cfg.dbConfig, logger)
 	defer db.Close()
 
-	svc := newService(db, cfg.Secret, logger)
+	svc := newService(db, cfg.secret, logger)
 	errs := make(chan error, 2)
 
-	go startHTTPServer(svc, cfg.HTTPPort, logger, errs)
-	go startGRPCServer(svc, cfg.GRPCPort, logger, errs)
+	go startHTTPServer(svc, cfg.httpPort, cfg.serverCert, cfg.serverKey, logger, errs)
+	go startGRPCServer(svc, cfg.grpcPort, cfg.serverCert, cfg.serverKey, logger, errs)
 
 	go func() {
 		c := make(chan os.Signal)
@@ -91,21 +103,32 @@ func main() {
 }
 
 func loadConfig() config {
+
+	dbConfig := postgres.Config{
+		Host:        mainflux.Env(envDBHost, defDBHost),
+		Port:        mainflux.Env(envDBPort, defDBPort),
+		User:        mainflux.Env(envDBUser, defDBUser),
+		Pass:        mainflux.Env(envDBPass, defDBPass),
+		Name:        mainflux.Env(envDBName, defDBName),
+		SSLMode:     mainflux.Env(envDBSSLMode, defDBSSLMode),
+		SSLCert:     mainflux.Env(envDBSSLCert, defDBSSLCert),
+		SSLKey:      mainflux.Env(envDBSSLKey, defDBSSLKey),
+		SSLRootCert: mainflux.Env(envDBSSLRootCert, defDBSSLRootCert),
+	}
+
 	return config{
-		LogLevel: mainflux.Env(envLogLevel, defLogLevel),
-		DBHost:   mainflux.Env(envDBHost, defDBHost),
-		DBPort:   mainflux.Env(envDBPort, defDBPort),
-		DBUser:   mainflux.Env(envDBUser, defDBUser),
-		DBPass:   mainflux.Env(envDBPass, defDBPass),
-		DBName:   mainflux.Env(envDBName, defDBName),
-		HTTPPort: mainflux.Env(envHTTPPort, defHTTPPort),
-		GRPCPort: mainflux.Env(envGRPCPort, defGRPCPort),
-		Secret:   mainflux.Env(envSecret, defSecret),
+		logLevel:   mainflux.Env(envLogLevel, defLogLevel),
+		dbConfig:   dbConfig,
+		httpPort:   mainflux.Env(envHTTPPort, defHTTPPort),
+		grpcPort:   mainflux.Env(envGRPCPort, defGRPCPort),
+		secret:     mainflux.Env(envSecret, defSecret),
+		serverCert: mainflux.Env(envServerCert, defServerCert),
+		serverKey:  mainflux.Env(envServerKey, defServerKey),
 	}
 }
 
-func connectToDB(cfg config, logger logger.Logger) *sql.DB {
-	db, err := postgres.Connect(cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBUser, cfg.DBPass)
+func connectToDB(dbConfig postgres.Config, logger logger.Logger) *sql.DB {
+	db, err := postgres.Connect(dbConfig)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Failed to connect to postgres: %s", err))
 		os.Exit(1)
@@ -138,19 +161,38 @@ func newService(db *sql.DB, secret string, logger logger.Logger) users.Service {
 	return svc
 }
 
-func startHTTPServer(svc users.Service, port string, logger logger.Logger, errs chan error) {
+func startHTTPServer(svc users.Service, port string, certFile string, keyFile string, logger logger.Logger, errs chan error) {
 	p := fmt.Sprintf(":%s", port)
-	logger.Info(fmt.Sprintf("Users HTTP service started, exposed port %s", port))
-	errs <- http.ListenAndServe(p, httpapi.MakeHandler(svc, logger))
+	if certFile != "" || keyFile != "" {
+		logger.Info(fmt.Sprintf("Users service started using https, cert %s key %s, exposed port %s", certFile, keyFile, port))
+		errs <- http.ListenAndServeTLS(p, certFile, keyFile, httpapi.MakeHandler(svc, logger))
+	} else {
+		logger.Info(fmt.Sprintf("Users service started using http, exposed port %s", port))
+		errs <- http.ListenAndServe(p, httpapi.MakeHandler(svc, logger))
+	}
 }
 
-func startGRPCServer(svc users.Service, port string, logger logger.Logger, errs chan error) {
+func startGRPCServer(svc users.Service, port string, certFile string, keyFile string, logger logger.Logger, errs chan error) {
 	p := fmt.Sprintf(":%s", port)
 	listener, err := net.Listen("tcp", p)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Failed to listen on port %s: %s", port, err))
 	}
-	server := grpc.NewServer()
+
+	var server *grpc.Server
+	if certFile != "" || keyFile != "" {
+		creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+		if err != nil {
+			logger.Error(fmt.Sprintf("Failed to load users certificates: %s", err))
+			os.Exit(1)
+		}
+		logger.Info(fmt.Sprintf("Users gRPC service started using https on port %s with cert %s key %s", port, certFile, keyFile))
+		server = grpc.NewServer(grpc.Creds(creds))
+	} else {
+		logger.Info(fmt.Sprintf("Users gRPC service started using http on port %s", port))
+		server = grpc.NewServer()
+	}
+
 	mainflux.RegisterUsersServiceServer(server, grpcapi.NewServer(svc))
 	logger.Info(fmt.Sprintf("Users gRPC service started, exposed port %s", port))
 	errs <- server.Serve(listener)

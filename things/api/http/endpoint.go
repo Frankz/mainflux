@@ -22,12 +22,21 @@ func addThingEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		saved, err := svc.AddThing(req.key, req.thing)
+		thing := things.Thing{
+			Type:     req.Type,
+			Name:     req.Name,
+			Metadata: req.Metadata,
+		}
+		saved, err := svc.AddThing(req.key, thing)
 		if err != nil {
 			return nil, err
 		}
 
-		return thingRes{id: saved.ID, created: true}, nil
+		res := thingRes{
+			id:      saved.ID,
+			created: true,
+		}
+		return res, nil
 	}
 }
 
@@ -39,13 +48,19 @@ func updateThingEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		req.thing.ID = req.id
+		thing := things.Thing{
+			ID:       req.id,
+			Type:     req.Type,
+			Name:     req.Name,
+			Metadata: req.Metadata,
+		}
 
-		if err := svc.UpdateThing(req.key, req.thing); err != nil {
+		if err := svc.UpdateThing(req.key, thing); err != nil {
 			return nil, err
 		}
 
-		return thingRes{id: req.id, created: false}, nil
+		res := thingRes{id: req.id, created: false}
+		return res, nil
 	}
 }
 
@@ -62,7 +77,15 @@ func viewThingEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		return viewThingRes{thing}, nil
+		res := viewThingRes{
+			ID:       thing.ID,
+			Owner:    thing.Owner,
+			Type:     thing.Type,
+			Name:     thing.Name,
+			Key:      thing.Key,
+			Metadata: thing.Metadata,
+		}
+		return res, nil
 	}
 }
 
@@ -74,12 +97,69 @@ func listThingsEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		things, err := svc.ListThings(req.key, req.offset, req.limit)
+		page, err := svc.ListThings(req.key, req.offset, req.limit)
 		if err != nil {
 			return nil, err
 		}
 
-		return listThingsRes{Things: things}, nil
+		res := thingsPageRes{
+			pageRes: pageRes{
+				Total:  page.Total,
+				Offset: page.Offset,
+				Limit:  page.Limit,
+			},
+			Things: []viewThingRes{},
+		}
+		for _, thing := range page.Things {
+			view := viewThingRes{
+				ID:       thing.ID,
+				Owner:    thing.Owner,
+				Type:     thing.Type,
+				Name:     thing.Name,
+				Key:      thing.Key,
+				Metadata: thing.Metadata,
+			}
+			res.Things = append(res.Things, view)
+		}
+
+		return res, nil
+	}
+}
+
+func listThingsByChannelEndpoint(svc things.Service) endpoint.Endpoint {
+	return func(_ context.Context, request interface{}) (interface{}, error) {
+		req := request.(listByConnectionReq)
+
+		if err := req.validate(); err != nil {
+			return nil, err
+		}
+
+		page, err := svc.ListThingsByChannel(req.key, req.id, req.offset, req.limit)
+		if err != nil {
+			return nil, err
+		}
+
+		res := thingsPageRes{
+			pageRes: pageRes{
+				Total:  page.Total,
+				Offset: page.Offset,
+				Limit:  page.Limit,
+			},
+			Things: []viewThingRes{},
+		}
+		for _, thing := range page.Things {
+			view := viewThingRes{
+				ID:       thing.ID,
+				Owner:    thing.Owner,
+				Type:     thing.Type,
+				Key:      thing.Key,
+				Name:     thing.Name,
+				Metadata: thing.Metadata,
+			}
+			res.Things = append(res.Things, view)
+		}
+
+		return res, nil
 	}
 }
 
@@ -96,7 +176,7 @@ func removeThingEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		if err = svc.RemoveThing(req.key, req.id); err != nil {
+		if err := svc.RemoveThing(req.key, req.id); err != nil {
 			return nil, err
 		}
 
@@ -112,12 +192,17 @@ func createChannelEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		saved, err := svc.CreateChannel(req.key, req.channel)
+		channel := things.Channel{Name: req.Name, Metadata: req.Metadata}
+		saved, err := svc.CreateChannel(req.key, channel)
 		if err != nil {
 			return nil, err
 		}
 
-		return channelRes{id: saved.ID, created: true}, nil
+		res := channelRes{
+			id:      saved.ID,
+			created: true,
+		}
+		return res, nil
 	}
 }
 
@@ -129,13 +214,20 @@ func updateChannelEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		req.channel.ID = req.id
-
-		if err := svc.UpdateChannel(req.key, req.channel); err != nil {
+		channel := things.Channel{
+			ID:       req.id,
+			Name:     req.Name,
+			Metadata: req.Metadata,
+		}
+		if err := svc.UpdateChannel(req.key, channel); err != nil {
 			return nil, err
 		}
 
-		return channelRes{id: req.id, created: false}, nil
+		res := channelRes{
+			id:      req.id,
+			created: false,
+		}
+		return res, nil
 	}
 }
 
@@ -152,7 +244,14 @@ func viewChannelEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		return viewChannelRes{channel}, nil
+		res := viewChannelRes{
+			ID:       channel.ID,
+			Owner:    channel.Owner,
+			Name:     channel.Name,
+			Metadata: channel.Metadata,
+		}
+
+		return res, nil
 	}
 }
 
@@ -164,12 +263,67 @@ func listChannelsEndpoint(svc things.Service) endpoint.Endpoint {
 			return nil, err
 		}
 
-		channels, err := svc.ListChannels(req.key, req.offset, req.limit)
+		page, err := svc.ListChannels(req.key, req.offset, req.limit)
 		if err != nil {
 			return nil, err
 		}
 
-		return listChannelsRes{Channels: channels}, nil
+		res := channelsPageRes{
+			pageRes: pageRes{
+				Total:  page.Total,
+				Offset: page.Offset,
+				Limit:  page.Limit,
+			},
+			Channels: []viewChannelRes{},
+		}
+		// Cast channels
+		for _, channel := range page.Channels {
+			view := viewChannelRes{
+				ID:       channel.ID,
+				Owner:    channel.Owner,
+				Name:     channel.Name,
+				Metadata: channel.Metadata,
+			}
+
+			res.Channels = append(res.Channels, view)
+		}
+
+		return res, nil
+	}
+}
+
+func listChannelsByThingEndpoint(svc things.Service) endpoint.Endpoint {
+	return func(_ context.Context, request interface{}) (interface{}, error) {
+		req := request.(listByConnectionReq)
+
+		if err := req.validate(); err != nil {
+			return nil, err
+		}
+
+		page, err := svc.ListChannelsByThing(req.key, req.id, req.offset, req.limit)
+		if err != nil {
+			return nil, err
+		}
+
+		res := channelsPageRes{
+			pageRes: pageRes{
+				Total:  page.Total,
+				Offset: page.Offset,
+				Limit:  page.Limit,
+			},
+			Channels: []viewChannelRes{},
+		}
+		for _, channel := range page.Channels {
+			view := viewChannelRes{
+				ID:       channel.ID,
+				Owner:    channel.Owner,
+				Name:     channel.Name,
+				Metadata: channel.Metadata,
+			}
+			res.Channels = append(res.Channels, view)
+		}
+
+		return res, nil
 	}
 }
 

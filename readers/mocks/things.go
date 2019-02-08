@@ -9,7 +9,6 @@ package mocks
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/mainflux/mainflux"
 	"google.golang.org/grpc"
@@ -17,7 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var errUnathorized = status.Error(codes.PermissionDenied, "missing or invalid credentials provided")
+var errUnauthorized = status.Error(codes.PermissionDenied, "missing or invalid credentials provided")
 
 var _ mainflux.ThingsServiceClient = (*thingsServiceMock)(nil)
 
@@ -31,15 +30,14 @@ func NewThingsService() mainflux.ThingsServiceClient {
 func (svc thingsServiceMock) CanAccess(ctx context.Context, in *mainflux.AccessReq, opts ...grpc.CallOption) (*mainflux.ThingID, error) {
 	token := in.GetToken()
 	if token == "invalid" {
-		return nil, errUnathorized
+		return nil, errUnauthorized
 	}
 
-	id, err := strconv.ParseUint(token, 10, 64)
-	if err != nil {
-		return nil, errUnathorized
+	if token == "" {
+		return nil, errUnauthorized
 	}
 
-	return &mainflux.ThingID{Value: id}, nil
+	return &mainflux.ThingID{Value: token}, nil
 }
 
 func (svc thingsServiceMock) Identify(_ context.Context, _ *mainflux.Token, _ ...grpc.CallOption) (*mainflux.ThingID, error) {
